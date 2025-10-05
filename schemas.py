@@ -1,3 +1,5 @@
+# this file contains Pydantic models (schemas) for request and response validation
+ 
 from pydantic import BaseModel
 
 #-------------------------------------------------------------
@@ -11,10 +13,13 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     pass
 
-class User(UserBase):
+class UserUpdate(UserBase):
+    pass
+
+class UserResponse(UserBase):
     id: int
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 #-------------------------------------------------------------
 # Post Schemas
@@ -30,7 +35,8 @@ class PostCreate(PostBase):
 class PostUpdate(PostBase):
     pass
 
-class Post(PostBase):
+class PostResponse(PostBase):
     id: int
+    author: UserResponse
     class Config:
-        orm_mode = True
+        from_attributes = True

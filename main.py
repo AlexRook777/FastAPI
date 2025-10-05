@@ -1,106 +1,122 @@
-from fastapi import FastAPI, HTTPException, Path
+# https://www.youtube.com/watch?v=ZXEOw_9h0hg
+from fastapi import FastAPI, HTTPException, Path, Depends
 from typing import Optional, List, Annotated
-from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+from models import Base, User, Post
+from database import engine, SessionLocal
+from schemas import UserCreate, UserUpdate, PostCreate, PostUpdate,  PostResponse, UserResponse
 
 app = FastAPI()
 
-class User(BaseModel):
-    id: int
-    name: str
-    email: str
-    age: int
 
-class UserCreate(BaseModel):
-    name: Annotated[str, Field(..., min_length=1, max_length=50)]
-    email: Annotated[str, Field(max_length=100)]
-    age: Annotated[int, Field(ge=1, le=180)]
+Base.metadata.create_all(bind=engine)
 
-class Post(BaseModel):
-    id: int
-    title: str
-    content: str
-    author: User
+# In-memory "database"
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-class PostCreate(BaseModel):
-    title: str
-    content: str
-    author_id: int
+#-------------------------------------------------------------
+# User Endpoints
+#-------------------------------------------------------------
+@app.get("/users/", response_model=List[UserResponse])
+async def read_users(skip: int = 0, limit: int = 10, db: Session = Depends(get_db)) -> List[UserResponse]:
+    users = db.query(User).offset(skip).limit(limit).all()
+    return users    
 
-class PostUpdate(BaseModel):
-    title: Optional[str] = None
-    content: Optional[str] = None
-    author_id: Optional[int] = None
+@app.get("/users/{user_id}", response_model=UserResponse)
+async def read_user(user_id: int, db: Session = Depends(get_db)) -> UserResponse:
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
 
-users: List[User] = [
-    User(id=1, name="Alice", email="alice@example.com", age=30),
-    User(id=2, name="Bob", email="bob@example.com", age=25),
-    User(id=3, name="Charlie", email="charlie@example.com", age=35),
-]
 
-posts: List[Post] = [
-    Post(id=1, title="First Post", content="This is the first post.", author=users[0]),
-    Post(id=2, title="Second Post", content="This is the second post.", author=users[1]),
-    Post(id=3, title="Third Post", content="This is the third post.", author=users[2]),
-]
+@app.post("/users/", response_model=UserResponse)
+async def create_user(user: UserCreate, db: Session = Depends(get_db)) -> UserResponse:
+    db_user = User(name=user.name, email=user.email, age=user.age)
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
 
-@app.get("/posts")
-async def get_posts() -> List[Post]:
+@app.put("/users/{user_id}", response_model=UserResponse)
+async def update_user(user_id: int, user: UserUpdate, db: Session = Depends(get_db)) -> UserResponse:
+    db_user = db.query(User).filter(User.id == user_id).first()
+    if db_user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    db_user.name = user.name
+    db_user.email = user.email
+    db_user.age = user.age
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+@app.delete("/users/{user_id}", response_model=dict)
+async def delete_user(user_id: int, db: Session = Depends(get_db)) -> dict:
+    # Check if the user exists
+    db_user = db.query(User).filter(User.id == user_id).first()
+    if db_user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Check if the user has any posts
+    if db_user.posts:
+        raise HTTPException(status_code=400, detail="Cannot delete user with associated posts")
+    # Delete the user
+    db.delete(db_user)
+    db.commit()
+    return {"detail": "User deleted"}
+
+
+#-------------------------------------------------------------
+# Post Endpoints
+#-------------------------------------------------------------
+@app.get("/posts/", response_model=List[PostResponse])
+async def read_posts(skip: int = 0, limit: int = 10, db: Session = Depends(get_db)) -> List[PostResponse]:
+    posts = db.query(Post).offset(skip).limit(limit).all()
     return posts
 
-@app.post("/posts/add", status_code=201)
-async def add_post(post: PostCreate) -> Post:
-    author = next((user for user in users if user.id == post.author_id), None)
-    if not author:
-        raise HTTPException(status_code=404, detail="Author not found")
-    new_id = max(p.id for p in posts) + 1 if posts else 1
-    new_post = Post(id=new_id, title=post.title, content=post.content, author=author)
-    posts.append(new_post)
-    return new_post
-
-@app.put("/posts/edit/{post_id}")
-async def edit_post(post_id: int, post: PostUpdate) -> Post:  
-    for i, p in enumerate(posts):
-        if p.id == post_id:
-            if post.title is not None:
-                p.title = post.title
-            if post.content is not None:
-                p.content = post.content
-            if post.author_id is not None:
-                author = next((user for user in users if user.id == post.author_id), None)
-                if not author:
-                    raise HTTPException(status_code=404, detail="Author not found")
-                p.author = author
-            posts[i] = p
-            return p
-    raise HTTPException(status_code=404, detail="Post not found")
-
-@app.delete("/posts/delete/{post_id}")
-async def delete_post(post_id: int) -> None:
-    for i, p in enumerate(posts):
-        if p.id == post_id:
-            posts.pop(i)
-            return None
-    raise HTTPException(status_code=404, detail="Post not found")
-
-@app.get("/posts/{post_id}")
-async def get_post(post_id: Annotated[int, Path(..., ge=1, le=3)]) -> Post:
-    for post in posts:
-        if post.id == post_id:
-            return post
-    raise HTTPException(status_code=404, detail="Post not found")
-
-@app.get("/search")
-async def search_posts(post_id: Optional[int] = None) -> Post:
-    if post_id is not None:
-        for post in posts:
-            if post.id == post_id:
-                return post
+@app.get("/posts/{post_id}", response_model=PostResponse)
+async def read_post(post_id: int, db: Session = Depends(get_db)) -> PostResponse:
+    post = db.query(Post).filter(Post.id == post_id).first()
+    if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
-    raise HTTPException(status_code=400, detail="No post_id provided")
+    return post
 
-@app.post("/users/add")
-async def add_user(user: UserCreate) -> User:
-    new_id = max(u.id for u in users) + 1 if users else 1
-    new_user = User(id=new_id, **user.model_dump())
-    users.append(new_user)
-    return new_user
+@app.post("/posts/", response_model=PostResponse)
+async def create_post(post: PostCreate, db: Session = Depends(get_db)) -> PostResponse:
+    # Check if the author exists
+    db_user = db.query(User).filter(User.id == post.author_id).first()
+    if db_user is None:
+        raise HTTPException(status_code=400, detail="Author not found")
+    # Create the post
+    db_post = Post(title=post.title, content=post.content, author_id=post.author_id)
+    db.add(db_post)
+    db.commit()
+    db.refresh(db_post)
+    return db_post
+
+@app.put("/posts/{post_id}", response_model=PostResponse)
+async def update_post(post_id: int, post: PostUpdate, db: Session = Depends(get_db)) -> PostResponse:
+    db_post = db.query(Post).filter(Post.id == post_id).first()
+    if db_post is None:
+        raise HTTPException(status_code=404, detail="Post not found")
+    db_post.title = post.title
+    db_post.content = post.content
+    db_post.author_id = post.author_id
+    db.commit()
+    db.refresh(db_post)
+    return db_post
+
+@app.delete("/posts/{post_id}", response_model=dict)
+async def delete_post(post_id: int, db: Session = Depends(get_db)) -> dict:
+    # Check if the post exists
+    db_post = db.query(Post).filter(Post.id == post_id).first()
+    if db_post is None:
+        raise HTTPException(status_code=404, detail="Post not found")
+    # Delete the post
+    db.delete(db_post)
+    db.commit()
+    return {"detail": "Post deleted"}
