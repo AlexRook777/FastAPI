@@ -1,14 +1,14 @@
 # this file contains Pydantic models (schemas) for request and response validation
  
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, EmailStr
 
 #-------------------------------------------------------------
 # User Schemas
 #-------------------------------------------------------------
 class UserBase(BaseModel):
-    name: str
-    email: str
-    age: int
+    name: str = Field(..., min_length=2, max_length=50)
+    email: EmailStr
+    age: int = Field(..., gt=0, le=120)
 
 class UserCreate(UserBase):
     pass
@@ -25,8 +25,8 @@ class UserResponse(UserBase):
 # Post Schemas
 #-------------------------------------------------------------
 class PostBase(BaseModel):
-    title: str
-    content: str
+    title: str = Field(..., min_length=3, max_length=100)
+    content: str = Field(..., min_length=10)
     author_id: int
 
 class PostCreate(PostBase):
